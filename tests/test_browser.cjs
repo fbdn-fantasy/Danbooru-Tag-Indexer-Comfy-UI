@@ -1,0 +1,302 @@
+/* Development dependency only: Playwright. Not needed to install or run the node.
+ * Start preview_server.py, then run: node tests/test_browser.cjs
+ */
+const { chromium } = require('playwright');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs');
+
+(async () => {
+    const browser = await chromium.launch({ channel: process.env.DTI_BROWSER || 'msedge', headless: true });
+    const page = await browser.newPage({ viewport: { width: 1200, height: 1000 }, permissions: ['clipboard-read', 'clipboard-write'] });
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    const index = page.locator('#index'), saved = page.locator('#saved');
+    const indexSearch = index.locator('input[type=search]');
+    const savedSearch = saved.locator('input[type=search]');
+    const exactRow = (scope, name) => scope.locator(`.dti-tag[data-dti-name="${name}"]`);
+    const expandSaved = async name => {
+        const card=saved.getByRole('article',{name:`Saved tag: ${name.replaceAll('_',' ')}`,exact:true});
+        const arrow=card.locator('.dti-saved-toggle');
+        if (await arrow.getAttribute('aria-expanded')==='false') await arrow.click();
+        return card;
+    };
+    const search = async (scope, query) => {
+        await scope.locator('input[type=search]').fill(query);
+        await page.waitForTimeout(300);
+    };
+    try {
+        await page.goto('http://127.0.0.1:8199');
+        await page.waitForFunction(() => window.previewReady);
+        await index.getByRole('button', { name: 'Toggle section Visual characteristics', exact: true }).waitFor();
+        assert.deepEqual(await index.locator('.dti-content > .dti-outline > li > .dti-outline-row > .dti-outline-label').allTextContents(), ['Intro','Visual characteristics','Copyrights, artists, projects and media','Metatags','See also']);
+        const folder = path.join(__dirname, '.cache');
+        fs.mkdirSync(folder, { recursive: true });
+        await index.getByRole('button', { name: 'Toggle section Visual characteristics', exact: true }).click();
+        await index.getByRole('button', { name: 'Toggle section Body', exact: true }).click();
+        await index.getByRole('button', { name: 'Expand category Tag group:Body parts', exact: true }).click();
+        const parts=index.locator('[data-name="tag_group:body_parts"]');
+        const expectedParts=['tag_group:ass','tag_group:breasts_tags','tag_group:face_tags','tag_group:hair','tag_group:hands','tag_group:feet','tag_group:neck_and_neckwear','on','tag_group:posture','tag_group:pussy','tag_group:shoulders','tag_group:skin_color','tag_group:wings'];
+        assert.deepEqual(await parts.locator(':scope > .dti-outline-body > .dti-outline > li').evaluateAll(rows=>rows.map(r=>r.dataset.name)),expectedParts);
+        assert.equal(await parts.getByText('Appendages',{exact:true}).count(),0);
+        await parts.getByRole('button',{name:'Expand category Tag group:On (object)',exact:true}).waitFor();
+        assert.equal(await index.getByRole('button',{name:'Info',exact:true}).count(),0);
+        await parts.getByRole('button',{name:'Expand category Tag group:Face tags',exact:true}).click();
+        const face=parts.locator('[data-name="tag_group:face_tags"]');
+        assert.deepEqual(await face.locator(':scope > .dti-outline-body > .dti-outline > li').evaluateAll(rows=>rows.map(r=>r.dataset.name)),['tag_group:ears_tags','tag_group:eyes_tags','eyebrows','nose']);
+        await parts.getByRole('button',{name:'Expand category Tag group:Hair',exact:true}).click();
+        const hair=parts.locator('[data-name="tag_group:hair"]');
+        assert.deepEqual(await hair.locator(':scope > .dti-outline-body > .dti-outline > li').evaluateAll(rows=>rows.map(r=>r.dataset.name)),['tag_group:hair_color','tag_group:hair_styles']);
+        await page.evaluate(()=>testNodes.index.setSize([680,950]));
+        await parts.getByRole('button',{name:'Expand category Tag group:Face tags',exact:true}).click();
+        await parts.getByRole('button',{name:'Expand category Tag group:Hair',exact:true}).click();
+        await parts.locator(':scope > .dti-outline-row > .dti-outline-label').evaluate(e=>e.scrollIntoView({block:'start'}));
+        await page.screenshot({path:path.join(folder,'wiki-main-hierarchy.png'),fullPage:true});
+        await page.evaluate(()=>testNodes.index.setSize([440,600]));
+        console.log('PASS: Body parts, Face and Hair retain the exact main wiki lists; no Appendages replacement or Info buttons');
+        await index.getByRole('button', { name: 'Expand category Tag group:Feet', exact: true }).click();
+        await index.getByRole('button', { name: 'Toggle section Style', exact: true }).waitFor();
+        assert.equal(await index.locator('.dti-folder').count(), 0);
+        assert.equal(await index.locator('[data-name="tag_groups"]').count(), 0);
+        await exactRow(index, 'barefoot').waitFor();
+        const toeList=index.locator('[data-name="section:tag_group:feet#toes-3"]');
+        const toes=toeList.locator(':scope > .dti-outline-body > .dti-outline > [data-name="toes"]');
+        await toes.getByRole('button',{name:'Expand tag toes',exact:true}).click();
+        await exactRow(toes,'egyptian_toe').waitFor();
+        for (const name of ['long_toes','greek_toe','egyptian_toe','toe_ring','toe_socks','toe_sucking','dorsiflexion','plantar_flexion','prehensile_toes','prehensile_feet']) {
+            assert.equal(await exactRow(toes,name).count(),1, `Missing or duplicate ${name} in full Toes wiki`);
+        }
+        assert.equal(await index.locator('.dti-content > .dti-description').count(),0);
+        await exactRow(toes,'greek_toe').locator('.dti-star').click();
+        const greek=saved.getByRole('article',{name:'Saved tag: greek toe',exact:true});
+        await greek.waitFor();
+        assert.equal(await greek.locator('.dti-saved-toggle').getAttribute('aria-expanded'),'false');
+        assert.equal(await greek.locator('.dti-description').count(),0);
+        assert.equal(await greek.locator('.dti-path').count(),0);
+        assert.ok((await greek.locator('.dti-saved-summary').textContent()).includes('second toe is longer'));
+        assert.ok(!(await greek.locator('.dti-saved-summary').textContent()).includes('See also'));
+        assert.ok((await greek.locator('.dti-saved-summary').textContent()).length<=220);
+        await greek.getByRole('button',{name:'Copy greek toe',exact:true}).click();
+        assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'greek toe');
+        assert.equal(await greek.locator('.dti-saved-toggle').getAttribute('aria-expanded'),'false');
+        await expandSaved('greek_toe');
+        await greek.getByText('See also',{exact:true}).waitFor();
+        assert.equal(await greek.locator('.dti-saved-summary').isVisible(),false);
+        assert.equal(await greek.locator('.dti-path').first().isVisible(),true);
+        await search(saved,'greek toe');
+        assert.equal(await greek.locator('.dti-saved-toggle').getAttribute('aria-expanded'),'true');
+        await greek.locator('.dti-saved-toggle').click();
+        assert.equal(await greek.locator('.dti-saved-summary').isVisible(),true);
+        assert.equal(await greek.locator('.dti-description').isVisible(),false);
+        await search(saved,'');
+        await exactRow(toes,'egyptian_toe').locator('.dti-star').click();
+        const compactEgypt=saved.getByRole('article',{name:'Saved tag: egyptian toe',exact:true});
+        await compactEgypt.waitFor();
+        assert.equal(await compactEgypt.locator('.dti-saved-toggle').getAttribute('aria-expanded'),'false');
+        assert.ok((await greek.boundingBox()).height < 180);
+        await page.screenshot({path:path.join(folder,'compact-saved-tags.png'),fullPage:true});
+        await expandSaved('greek_toe');
+        assert.equal(await compactEgypt.locator('.dti-saved-toggle').getAttribute('aria-expanded'),'false');
+        await page.screenshot({path:path.join(folder,'expanded-saved-tag.png'),fullPage:true});
+        await exactRow(saved,'greek_toe').locator('.dti-star').click();
+        await greek.waitFor({state:'detached'});
+        await exactRow(saved,'egyptian_toe').locator('.dti-star').click();
+        await saved.getByText('Star a tag in the connected Index, or add your own personal tag.',{exact:true}).waitFor();
+        console.log('PASS: saved Greek/Egyptian tags start compact; arrows expand independently, preserve descriptions and paths, and collapse again; copy does not expand');
+        // A nested tag must load its own wiki too, retaining unique parent entries.
+        const nails=toes.locator('[data-name="toenails"]');
+        await nails.getByRole('button',{name:'Expand tag toenails',exact:true}).click();
+        await exactRow(nails,'fingernails').waitFor();
+        assert.equal(await nails.getByText('Referenced tags',{exact:true}).count(),0);
+        assert.equal(await nails.getByText('Also listed on the parent page',{exact:true}).count(),0);
+        await exactRow(nails,'sharp_toenails').locator('.dti-star').click();
+        await saved.getByRole('article',{name:'Saved tag: sharp toenails',exact:true}).waitFor();
+        await expandSaved((await saved.locator('.dti-tag').first().getAttribute('data-dti-name')));
+        assert.ok((await saved.locator('.dti-path').first().textContent()).includes('Appearance'));
+        await exactRow(saved,'sharp_toenails').locator('.dti-star').click();
+        await saved.getByText('Star a tag in the connected Index, or add your own personal tag.',{exact:true}).waitFor();
+        await exactRow(toes,'egyptian_toe').getByRole('button',{name:'Copy egyptian toe',exact:true}).click();
+        assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'egyptian toe');
+        await exactRow(toes,'egyptian_toe').locator('.dti-star').click();
+        await saved.getByRole('article',{name:'Saved tag: egyptian toe',exact:true}).waitFor();
+        await expandSaved((await saved.locator('.dti-tag').first().getAttribute('data-dti-name')));
+        assert.ok((await saved.locator('.dti-path').first().textContent()).includes('Appearance'));
+        await exactRow(saved,'egyptian_toe').locator('.dti-star').click();
+        await saved.getByText('Star a tag in the connected Index, or add your own personal tag.',{exact:true}).waitFor();
+        await toes.locator(':scope > .dti-outline-body > .dti-outline-description').getByRole('button',{name:'Read feet',exact:true}).click();
+        await index.locator('.dti-content > .dti-description').waitFor();
+        await index.getByRole('button',{name:'Return to tags',exact:true}).click();
+        await exactRow(toes,'egyptian_toe').waitFor();
+        await page.evaluate(()=>testNodes.index.setSize([680,950]));
+        await toes.getByRole('button',{name:'Expand tag toes',exact:true}).evaluate(e => e.scrollIntoView({block:'start'}));
+        await page.screenshot({path:path.join(folder,'full-toes-wiki.png'),fullPage:true});
+        await page.evaluate(()=>testNodes.index.setSize([440,600]));
+        console.log('PASS: expanding Toes loads its full wiki, including Appearance, Actions, See also; nested Toenails loads its wiki and retains parent-only tags; tree saves/copies and wiki description links/Back work');
+        // Search results must expose the same full wiki. Backlinks stop at ancestors.
+        await search(index,'toes');
+        const searchToes=index.locator('.dti-content > .dti-outline > [data-name="toes"]');
+        await searchToes.getByRole('button',{name:'Expand tag toes',exact:true}).click();
+        await exactRow(searchToes,'egyptian_toe').waitFor();
+        const egypt=searchToes.locator('[data-name="egyptian_toe"]');
+        await egypt.getByRole('button',{name:'Expand tag egyptian toe',exact:true}).click();
+        const repeatToes=egypt.locator('[data-name="toes"]');
+        await repeatToes.getByRole('button',{name:'Expand tag toes',exact:true}).click();
+        await repeatToes.getByText('This page is already expanded above.',{exact:true}).waitFor();
+        console.log('PASS: tag search expands full pages and wiki cycles terminate');
+        await search(index,'ass');
+        const ass=index.locator('.dti-content > .dti-outline > [data-name="ass"]');
+        await ass.getByRole('button',{name:'Expand tag ass',exact:true}).click();
+        await exactRow(ass,'ass_rest').waitFor();
+        await exactRow(ass,'underbutt').waitFor();
+        await search(index,'kyoto_animation');
+        const studio=index.locator('.dti-content > .dti-outline > [data-name="kyoto_animation"]');
+        await studio.getByRole('button',{name:'Expand tag kyoto animation',exact:true}).click();
+        await exactRow(studio,'lucky_star').waitFor();
+        await exactRow(studio,'k-on!').waitFor();
+        console.log('PASS: full Ass and Kyoto Animation tag wikis expand without opening a detail page');
+        await search(index,'tag_group:ass');
+        await index.getByRole('button',{name:/^Expand category tag group:ass$/i}).click();
+        await index.getByRole('button',{name:'Toggle section Anatomy of the ass',exact:true}).waitFor();
+        assert.equal(await index.locator('.dti-folder').count(),0);
+        await search(index,'tag_group:fighting_games');
+        await index.getByRole('button',{name:/^Expand category tag group:fighting games$/i}).click();
+        await index.getByRole('button',{name:'Toggle section Fighting games',exact:true}).waitFor();
+        assert.equal(await index.locator('.dti-folder').count(),0);
+        await search(index,'tag_group:feet');
+        await index.getByRole('button',{name:/^Expand category tag group:feet$/i}).click();
+        const feet=index.locator('[data-name="tag_group:feet"]').first();
+        await feet.getByRole('button',{name:'Toggle section Style',exact:true}).waitFor();
+        assert.deepEqual(await feet.locator(':scope > .dti-outline-body > .dti-outline > li > .dti-outline-row > .dti-outline-label').allTextContents(),['Main','Style','Anatomy / Parts','Toes','Poses & Views','Clothing & Accessories','Actions & Fetish','Misc / Technical','See Also']);
+        await exactRow(feet,'socks').waitFor();
+        await exactRow(feet,'socks').locator('.dti-star').click();
+        await saved.getByRole('article',{name:'Saved tag: socks',exact:true}).waitFor();
+        await expandSaved('socks');
+        assert.ok((await saved.locator('.dti-path').first().textContent()).includes('Legwear'));
+        await exactRow(saved,'socks').locator('.dti-star').click();
+        await saved.getByText('Star a tag in the connected Index, or add your own personal tag.',{exact:true}).waitFor();
+        console.log('PASS: Ass, non-visual categories, and category search use inline outlines; unlinked section context saves correctly');
+        await search(index,'dorsiflexion');
+        const dorsi=index.locator('.dti-content > .dti-outline > [data-name="dorsiflexion"]');
+        await dorsi.getByRole('button',{name:'Expand tag dorsiflexion',exact:true}).click();
+        await dorsi.getByRole('button',{name:'Expand category Tag group:Feet',exact:true}).click();
+        await index.getByRole('button',{name:'Toggle section Style',exact:true}).waitFor();
+        assert.equal(await index.locator('.dti-folder').count(),0);
+        await search(index,'Egyptian Toe');
+        const blue = exactRow(index, 'egyptian_toe');
+        await blue.waitFor();
+        assert.equal(await blue.locator('.dti-tag-name').textContent(), 'egyptian toe');
+        await blue.getByRole('button', { name: 'Copy egyptian toe', exact: true }).click();
+        assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'egyptian toe');
+        assert.equal(await blue.locator('.dti-star').isEnabled(), true);
+        await blue.locator('.dti-star').click();
+        await page.waitForFunction(() => document.querySelector('#index .dti-message')?.textContent.includes('Saved with'));
+        assert.equal(await blue.locator('.dti-star').getAttribute('aria-pressed'), 'true');
+        await saved.getByRole('article', { name: 'Saved tag: egyptian toe', exact: true }).waitFor();
+        assert.equal(await saved.locator('.dti-folder').count(), 0);
+        assert.ok((await saved.locator('.dti-saved-summary').textContent()).includes('first (big) toe'));
+        assert.equal(await saved.locator('.dti-description').count(),0);
+        await expandSaved('egyptian_toe');
+        assert.ok((await saved.locator('.dti-description').textContent()).includes('first (big) toe'));
+        assert.ok((await saved.locator('.dti-path').first().textContent()).includes('Visual characteristics'));
+        await saved.getByRole('button', { name: 'Copy egyptian toe', exact: true }).click();
+        assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'egyptian toe');
+        await page.evaluate(async () => {
+            window.originalCopy = navigator.clipboard.writeText.bind(navigator.clipboard);
+            await window.originalCopy('clipboard fallback sentinel');
+            navigator.clipboard.writeText = async () => { throw new Error('Clipboard API restricted'); };
+        });
+        await saved.getByRole('button', { name: 'Copy egyptian toe', exact: true }).click();
+        assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'egyptian toe');
+        await page.evaluate(() => { navigator.clipboard.writeText = window.originalCopy; });
+        for (const query of ['egyptian_toe', 'Egyptian Toe']) {
+            await search(saved, query);
+            await exactRow(saved, 'egyptian_toe').waitFor();
+        }
+        console.log('PASS: Egyptian Toe remains searchable; saved card starts compact and reveals its full description and path on expansion; copy uses spaces');
+
+        const sizes = await page.evaluate(() => {
+            const measure = () => [...document.querySelectorAll('.dti-root')].map(e => e.getBoundingClientRect().height);
+            testNodes.index.setSize([440,550]); testNodes.saved.setSize([440,550]);
+            const before = measure();
+            for (const node of Object.values({ index: testNodes.index, saved: testNodes.saved })) {
+                if (node.widgets[0].computeSize) throw new Error('DOM widget incorrectly has a fixed computeSize');
+                node.setSize([440, 800]);
+            }
+            const grown = measure();
+            testNodes.index.setSize([440, 430]);testNodes.saved.setSize([440, 430]);
+            const shrunk = measure();
+            const footersInside = [...document.querySelectorAll('.dti-root')].every(e => e.querySelector('.dti-footer').getBoundingClientRect().bottom <= e.getBoundingClientRect().bottom);
+            testNodes.index.setSize([440, 600]);testNodes.saved.setSize([440, 700]);
+            return { before, grown, shrunk, footersInside };
+        });
+        for (let i=0;i<2;i++) {
+            assert.ok(sizes.grown[i] - sizes.before[i] > 200);
+            assert.ok(sizes.grown[i] - sizes.shrunk[i] > 300);
+        }
+        assert.equal(sizes.footersInside, true);
+        console.log('PASS: native DOM allocation grows and shrinks both panels; footers remain inside');
+
+        await page.getByRole('button', { name: 'Disconnect wire', exact: true }).click();
+        await page.waitForFunction(() => document.querySelector('#index .dti-star')?.disabled);
+        assert.ok((await saved.locator('.dti-status').textContent()).includes('Disconnected'));
+        await saved.getByRole('button', { name: 'Add a tag only to this saved collection', exact: true }).click();
+        await saved.getByLabel('Tag name', { exact: true }).fill('my_unique_test_tag');
+        await saved.getByLabel('Folders (separate with /)', { exact: true }).fill('Personal / Testing');
+        await saved.getByLabel('Description (optional)', { exact: true }).fill('My notes <img src=x onerror=alert(1)>');
+        await saved.getByRole('button', { name: 'Save personal tag', exact: true }).click();
+        await page.waitForFunction(() => document.querySelector('#saved .dti-message')?.textContent.includes('Personal tag saved'));
+        await search(saved, 'my_unique_test_tag');
+        await exactRow(saved, 'my_unique_test_tag').waitFor();
+        assert.equal(await saved.locator('.dti-saved-summary img').count(),0);
+        assert.ok((await saved.locator('.dti-saved-summary').textContent()).includes('<img'));
+        await expandSaved('my_unique_test_tag');
+        assert.equal(await saved.locator('.dti-description img').count(), 0);
+        assert.ok((await saved.locator('.dti-description').textContent()).includes('<img'));
+        await search(index, 'my_unique_test_tag');
+        await index.getByText('No matches. Try another name or description.', { exact: true }).waitFor();
+        console.log('PASS: disconnect blocks transfer; personal tags stay separate; descriptions are safe text');
+
+        await page.getByRole('button', { name: 'Save test workflow', exact: true }).click();
+        const id = await page.evaluate(() => window.testNodes.saved.properties.danbooru_collection);
+        await page.reload();
+        await page.waitForFunction(() => window.previewReady);
+        assert.equal(await page.evaluate(() => window.testNodes.saved.properties.danbooru_collection), id);
+        assert.deepEqual(await page.evaluate(() => [testNodes.index.size, testNodes.saved.size]), [[440,600],[440,700]]);
+        await search(saved, 'my_unique_test_tag');
+        await exactRow(saved, 'my_unique_test_tag').waitFor();
+        await search(saved, 'egyptian_toe');
+        await exactRow(saved, 'egyptian_toe').waitFor();
+        await page.getByRole('button', { name: 'Connect wire', exact: true }).click();
+        await search(index, 'Egyptian Toe');
+        await blue.waitFor();
+        assert.equal(await blue.locator('.dti-star').getAttribute('aria-pressed'), 'true');
+        await exactRow(saved, 'egyptian_toe').locator('.dti-star').click();
+        await page.waitForFunction(() => document.querySelector('#saved .dti-message')?.textContent.includes('Removed from'));
+        assert.equal(await blue.locator('.dti-star').getAttribute('aria-pressed'), 'false');
+        console.log('PASS: workflow reload restores collection; reconnect and removal update both nodes');
+
+        await page.route('**/danbooru-indexer/collections/*', async route => {
+            if (route.request().method() === 'POST' && route.request().postDataJSON()?.action === 'save') {
+                return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Simulated storage failure' }) });
+            }
+            return route.continue();
+        });
+        await blue.locator('.dti-star').click();
+        await index.getByText('Simulated storage failure', { exact: true }).waitFor();
+        assert.equal(await blue.locator('.dti-star').getAttribute('aria-pressed'), 'false');
+        await page.unroute('**/danbooru-indexer/collections/*');
+        await blue.locator('.dti-star').click();
+        await page.waitForFunction(() => document.querySelector('#index .dti-message')?.textContent.includes('Saved with'));
+        console.log('PASS: failed saves remain unstarred; retry succeeds');
+
+        await search(saved, '');
+        await saved.getByRole('article', { name: 'Saved tag: egyptian toe', exact: true }).waitFor();
+        assert.equal(await saved.locator('.dti-folder').count(), 0);
+        await page.screenshot({ path: path.join(folder, 'preview.png'), fullPage: true });
+        assert.equal(await index.getByRole('button',{name:'Info',exact:true}).count(),0);
+        assert.equal(await index.getByText('Referenced tags',{exact:true}).count(),0);
+        assert.equal(await index.getByText('Also listed on the parent page',{exact:true}).count(),0);
+        assert.deepEqual(errors, []);
+        console.log('PASS: no uncaught browser errors; preview screenshot captured');
+    } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

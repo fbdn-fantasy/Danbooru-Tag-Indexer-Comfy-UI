@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Danbooru V7 development preview</title>
+<style>
+body{margin:0;padding:32px;background:#101319;color:#e7ebf1;font:14px system-ui}header{max-width:1020px;margin:0 auto 24px}h1{font-size:24px;font-weight:600}p{color:#a9b5c5}main{display:flex;gap:80px;justify-content:center;position:relative}.node{width:440px;min-width:320px;background:#262e3a;border:1px solid #4c5b6e;border-radius:12px;padding:0 9px 9px}.title{padding:14px 8px}.port{font-size:12px;color:#a6d7c6;padding:0 6px 8px}#index .port{text-align:right}.body{height:520px}button{cursor:pointer}header button{padding:8px 12px;border:1px solid #536474;border-radius:8px;background:#263641;color:#e8edf4}.wire{position:absolute;top:57px;width:80px;height:3px;background:#a6d7c6;left:calc(50% - 40px)}.hidden{display:none}
+</style>
+<style>main{align-items:flex-start}</style>
+<header><h1>Danbooru Tag Indexer · V7</h1><p>Development harness · real catalog and storage, simulated ComfyUI node host.</p><button id="wire-toggle">Disconnect wire</button> <button id="save-workflow">Save test workflow</button></header>
+<main><section id="index" class="node"><div class="title">Danbooru · Tag Index</div><div class="port">tag_library ●</div><div class="body"></div></section><div class="wire"></div><section id="saved" class="node"><div class="title">Danbooru · Saved Tags</div><div class="port">● tag_library</div><div class="body"></div></section></main>
+<script type="module">
+import '/extensions/dti/indexer.js';
+const TYPE='DANBOORU_TAG_LIBRARY';
+class Node {
+ constructor(id,type){this.id=id;this.type=this.comfyClass=type;this.properties={};this.inputs=type==='DanbooruSavedTags'?[{name:'tag_library',type:TYPE,link:null}]:[];this.outputs=type==='DanbooruTagIndex'?[{type:TYPE,links:[]}]:[];this.widgets=[];}
+ addDOMWidget(name,type,element,options){document.querySelector(this.id===1?'#index .body':'#saved .body').append(element);const widget={name,type,element,options};this.widgets.push(widget);return widget;}
+ setSize(size){
+  this.size=size;
+  const widget=this.widgets[0];
+  if(!widget)return;
+  // Model ComfyUI's allocation decision: computeSize means fixed-height;
+  // native DOM layout with an unset maximum takes the remaining node space.
+  const allocated=widget.computeSize?widget.computeSize(size[0])[1]:Math.max(widget.options.getMinHeight(),size[1]-60);
+  const section=document.querySelector(this.id===1?'#index':'#saved');
+  section.style.width=size[0]+'px';
+  section.style.minHeight=size[1]+'px';
+  section.querySelector('.body').style.height=(allocated-20)+'px';
+ }
+}
+class IndexNode extends Node{};class SavedNode extends Node{};
+await window.extension.beforeRegisterNodeDef(IndexNode,{name:'DanbooruTagIndex'});
+await window.extension.beforeRegisterNodeDef(SavedNode,{name:'DanbooruSavedTags'});
+const index=new IndexNode(1,'DanbooruTagIndex'),saved=new SavedNode(2,'DanbooruSavedTags');
+const graph={links:{},getNodeById:id=>[index,saved].find(n=>n.id===id),setDirtyCanvas(){}};
+for(const n of [index,saved]){n.onNodeCreated();n.graph=graph;n.onAdded?.();}
+const old=JSON.parse(localStorage.getItem('dti-test-workflow')||'null');
+if(old){saved.properties=old.properties;if(old.sizes){index.setSize(old.sizes[0]);saved.setSize(old.sizes[1]);}}
+function wire(connected){index.outputs[0].links=connected?[1]:[];saved.inputs[0].link=connected?1:null;graph.links=connected?{1:{origin_id:1,origin_slot:0,target_id:2,target_slot:0}}:{};index.onConnectionsChange();saved.onConnectionsChange();document.querySelector('.wire').classList.toggle('hidden',!connected);document.querySelector('#wire-toggle').textContent=connected?'Disconnect wire':'Connect wire';}
+wire(old?.connected??true);
+document.querySelector('#wire-toggle').onclick=()=>wire(saved.inputs[0].link===null);
+document.querySelector('#save-workflow').onclick=()=>localStorage.setItem('dti-test-workflow',JSON.stringify({properties:saved.properties,connected:saved.inputs[0].link!==null,sizes:[index.size,saved.size]}));
+window.testNodes={index,saved,wire,graph};
+await window.extension.afterConfigureGraph();
+window.previewReady=true;
+</script></html>
